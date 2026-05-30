@@ -79,21 +79,20 @@ pipeline {
         stage('Container scan (Trivy)') {
           steps {
             sh """
-              mkdir -p security
               docker run --rm \\
                 -v /var/run/docker.sock:/var/run/docker.sock \\
                 -v jenkins_home:/var/jenkins_home \\
+                -w /var/jenkins_home/workspace/task-manager-pipeline \\
                 aquasec/trivy:latest image \\
                   --severity HIGH,CRITICAL \\
                   --exit-code 0 \\
                   --no-progress \\
                   --format json \\
-                  --output ${WORKSPACE}/security/trivy-report.json \\
+                  --output trivy-report.json \\
                   ${APP_NAME}:${IMAGE_TAG}
-              echo "Trivy report contents:"
-              ls -la security/
+              ls -la trivy-report.json
             """
-            archiveArtifacts artifacts: 'security/trivy-report.json', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'trivy-report.json', allowEmptyArchive: true
           }
         }
       }
