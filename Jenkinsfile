@@ -78,19 +78,21 @@ pipeline {
         }
         stage('Container scan (Trivy)') {
           steps {
+            // Run Trivy, write report to stdout, capture it on the Jenkins agent side.
+            // This avoids any cross-container volume-mount issues on Windows.
             sh """
               docker run --rm \\
                 -v /var/run/docker.sock:/var/run/docker.sock \\
-                -v jenkins_home:/var/jenkins_home \\
-                -w /var/jenkins_home/workspace/task-manager-pipeline \\
                 aquasec/trivy:latest image \\
                   --severity HIGH,CRITICAL \\
                   --exit-code 0 \\
                   --no-progress \\
                   --format json \\
-                  --output trivy-report.json \\
-                  ${APP_NAME}:${IMAGE_TAG}
+                  ${APP_NAME}:${IMAGE_TAG} > trivy-report.json
+              echo "Trivy report size:"
               ls -la trivy-report.json
+              echo "Vulnerability count:"
+              grep -o '"VulnerabilityID"' trivy-report.json | wc -l || true
             """
             archiveArtifacts artifacts: 'trivy-report.json', allowEmptyArchive: true
           }
