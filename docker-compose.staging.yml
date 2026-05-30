@@ -9,7 +9,7 @@ services:
       - JWT_SECRET=${JWT_SECRET_STAGING:-staging-secret-change-me}
       - PORT=3000
     ports:
-      - "3001:3000"
+      - "3002:3000"
     networks:
       - devops-net
 
