@@ -55,17 +55,14 @@ pipeline {
       steps {
         withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
           sh '''
-            docker run --rm \
-              --network devops-net \
-              -v jenkins_home:/var/jenkins_home \
-              -w "${WORKSPACE}" \
-              -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
-              -e SONAR_TOKEN="${SONAR_TOKEN}" \
-              sonarsource/sonar-scanner-cli:latest \
-              -Dsonar.projectBaseDir=${WORKSPACE} \
+            sonar-scanner \
+              -Dsonar.host.url=${SONAR_HOST_URL} \
+              -Dsonar.token=${SONAR_TOKEN} \
               -Dsonar.projectKey=devops-task-manager \
+              -Dsonar.projectName="DevOps Task Manager" \
               -Dsonar.sources=src \
-              -Dsonar.tests=tests
+              -Dsonar.tests=tests \
+              -Dsonar.exclusions=node_modules/**,coverage/**,artifacts/**,security/**,test-results/**
           '''
         }
       }
