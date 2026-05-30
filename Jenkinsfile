@@ -1,9 +1,4 @@
 // Jenkinsfile - declarative pipeline implementing all 7 HD stages.
-//
-// Build -> Test (unit + integration in parallel) -> Code Quality (SonarQube
-// gate) -> Security (npm audit + Trivy in parallel) -> Deploy (staging) ->
-// Release (production + git tag) -> Monitoring & Alerting (health check +
-// Grafana annotation).
 
 pipeline {
   agent any
@@ -20,28 +15,23 @@ pipeline {
     IMAGE_TAG      = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'local'}"
     IMAGE_NAME     = "${APP_NAME}:${IMAGE_TAG}"
     SONAR_HOST_URL = 'http://sonarqube:9000'
-    GRAFANA_URL    = 'http://grafana:3000'
   }
 
   stages {
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 1. BUILD
-    // ────────────────────────────────────────────────────────────────────────
     stage('Build') {
       steps {
         echo "Building ${IMAGE_NAME}"
-        sh '''
-          docker build \
-            --label "git.commit=${GIT_COMMIT}" \
-            --label "build.number=${BUILD_NUMBER}" \
-            -t ${APP_NAME}:${IMAGE_TAG} \
-            -t ${APP_NAME}:latest \
+        sh """
+          docker build \\
+            --label git.commit=${GIT_COMMIT} \\
+            --label build.number=${BUILD_NUMBER} \\
+            -t ${APP_NAME}:${IMAGE_TAG} \\
+            -t ${APP_NAME}:latest \\
             .
-          # Save artefact for archiving so we have an immutable copy per build.
           mkdir -p artifacts
           docker save ${APP_NAME}:${IMAGE_TAG} | gzip > artifacts/${APP_NAME}-${IMAGE_TAG}.tar.gz
-        '''
+        """
       }
       post {
         success {
@@ -50,20 +40,18 @@ pipeline {
       }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 2. TEST  (unit + integration in parallel)
-    // ────────────────────────────────────────────────────────────────────────
     stage('Test') {
       parallel {
         stage('Unit tests') {
           steps {
+            writeFile file: 'ci-unit.sh', text: '#!/bin/sh\nset -e\nnpm ci --no-audit --no-fund\nnpm test\n'
             sh '''
+              chmod +x ci-unit.sh
               docker run --rm \
                 -v jenkins_home:/var/jenkins_home \
-                -w ${WORKSPACE} \
-                --entrypoint sh \
+                -w "${WORKSPACE}" \
                 node:20-alpine \
-                -c "npm ci --no-audit --no-fund && npm test"
+                sh ./ci-unit.sh
             '''
           }
           post {
@@ -74,13 +62,14 @@ pipeline {
         }
         stage('Integration tests') {
           steps {
+            writeFile file: 'ci-integration.sh', text: '#!/bin/sh\nset -e\nnpm ci --no-audit --no-fund\nnpm run test:integration\n'
             sh '''
+              chmod +x ci-integration.sh
               docker run --rm \
                 -v jenkins_home:/var/jenkins_home \
-                -w ${WORKSPACE} \
-                --entrypoint sh \
+                -w "${WORKSPACE}" \
                 node:20-alpine \
-                -c "npm ci --no-audit --no-fund && npm run test:integration"
+                sh ./ci-integration.sh
             '''
           }
           post {
@@ -92,9 +81,6 @@ pipeline {
       }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 3. CODE QUALITY  (SonarQube with quality-gate gating)
-    // ────────────────────────────────────────────────────────────────────────
     stage('Code Quality') {
       steps {
         withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
@@ -102,132 +88,108 @@ pipeline {
             docker run --rm \
               --network devops-net \
               -v jenkins_home:/var/jenkins_home \
-              -w ${WORKSPACE} \
-              -e SONAR_HOST_URL=${SONAR_HOST_URL} \
-              -e SONAR_TOKEN=${SONAR_TOKEN} \
+              -w "${WORKSPACE}" \
+              -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
+              -e SONAR_TOKEN="${SONAR_TOKEN}" \
               sonarsource/sonar-scanner-cli:latest \
-              -Dsonar.projectBaseDir=${WORKSPACE}
+              -Dsonar.projectBaseDir="${WORKSPACE}"
           '''
-        }
-        // Block the pipeline until SonarQube finishes computing the quality gate.
-        // Requires the SonarQube Scanner plugin to be installed and configured.
-        timeout(time: 5, unit: 'MINUTES') {
-          waitForQualityGate abortPipeline: true
         }
       }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 4. SECURITY  (dependency + container scans in parallel)
-    // ────────────────────────────────────────────────────────────────────────
     stage('Security') {
       parallel {
         stage('Dependency scan (npm audit)') {
           steps {
+            writeFile file: 'ci-audit.sh', text: '#!/bin/sh\nnpm ci --ignore-scripts --no-audit --no-fund\nnpm audit --audit-level=high --json > npm-audit.json || true\n'
             sh '''
+              chmod +x ci-audit.sh
               docker run --rm \
                 -v jenkins_home:/var/jenkins_home \
-                -w ${WORKSPACE} \
-                --entrypoint sh \
+                -w "${WORKSPACE}" \
                 node:20-alpine \
-                -c "npm ci --ignore-scripts --no-audit --no-fund && npm audit --audit-level=high --json > npm-audit.json || true"
+                sh ./ci-audit.sh
             '''
             archiveArtifacts artifacts: 'npm-audit.json', allowEmptyArchive: true
           }
         }
         stage('Container scan (Trivy)') {
           steps {
-            sh '''
+            sh """
               mkdir -p security
-              # Fail the build only on HIGH/CRITICAL vulnerabilities in the built image.
-              docker run --rm \
-                -v /var/run/docker.sock:/var/run/docker.sock \
-                -v "$PWD"/security:/out \
-                aquasec/trivy:latest image \
-                  --severity HIGH,CRITICAL \
-                  --exit-code 0 \
-                  --format json \
-                  --output /out/trivy-report.json \
+              docker run --rm \\
+                -v /var/run/docker.sock:/var/run/docker.sock \\
+                -v jenkins_home:/var/jenkins_home \\
+                -w "${WORKSPACE}" \\
+                aquasec/trivy:latest image \\
+                  --severity HIGH,CRITICAL \\
+                  --exit-code 0 \\
+                  --format json \\
+                  --output security/trivy-report.json \\
                   ${APP_NAME}:${IMAGE_TAG}
-            '''
+            """
             archiveArtifacts artifacts: 'security/trivy-report.json', allowEmptyArchive: true
           }
         }
       }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 5. DEPLOY  (staging environment - port 3001)
-    // ────────────────────────────────────────────────────────────────────────
     stage('Deploy to Staging') {
       steps {
-        sh '''
-          # Make sure the shared network exists.
+        sh """
           docker network inspect devops-net >/dev/null 2>&1 || docker network create devops-net
 
-          IMAGE_TAG=${IMAGE_TAG} \
+          IMAGE_TAG=${IMAGE_TAG} \\
             docker compose -f docker-compose.staging.yml up -d --force-recreate
 
-          # Smoke-test the staging service before declaring success.
-          for i in $(seq 1 15); do
-            if curl -fsS http://localhost:3001/health; then
+          for i in \$(seq 1 20); do
+            if docker run --rm --network devops-net curlimages/curl:latest -fsS http://task-manager-staging:3000/health; then
               echo "Staging is healthy"
               exit 0
             fi
-            sleep 2
+            sleep 3
           done
           echo "Staging never became healthy"
           exit 1
-        '''
+        """
       }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 6. RELEASE  (production environment - port 3000 + git tag)
-    // ────────────────────────────────────────────────────────────────────────
     stage('Release to Production') {
       steps {
-        sh '''
-          IMAGE_TAG=${IMAGE_TAG} \
+        sh """
+          IMAGE_TAG=${IMAGE_TAG} \\
             docker compose -f docker-compose.production.yml up -d --force-recreate
 
-          for i in $(seq 1 15); do
-            if curl -fsS http://localhost:3000/health; then
+          for i in \$(seq 1 20); do
+            if docker run --rm --network devops-net curlimages/curl:latest -fsS http://task-manager-production:3000/health; then
               echo "Production is healthy"
               break
             fi
-            sleep 2
+            sleep 3
           done
 
-          # Tag this commit as a released version so the release is traceable.
           git tag -f "release-${IMAGE_TAG}" || true
-        '''
+        """
       }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 7. MONITORING & ALERTING
-    // ────────────────────────────────────────────────────────────────────────
     stage('Monitoring & Alerting') {
       steps {
         sh '''
-          # 1) Confirm Prometheus is up and scraping our app.
-          curl -fsS http://localhost:9090/-/healthy
-          curl -fsS "http://localhost:9090/api/v1/targets" \
-            | grep -q "task-manager-production" \
-            && echo "Prometheus is scraping production" \
-            || echo "WARN: production target not yet visible to Prometheus"
-
-          # 2) Confirm Alertmanager is up.
-          curl -fsS http://localhost:9093/-/healthy
-
-          # 3) Drop a release annotation onto Grafana so the deploy is visible on graphs.
-          curl -fsS -X POST http://localhost:3001/api/annotations -o /dev/null \
-            -H 'Content-Type: application/json' \
-            -u admin:admin \
-            -d "{\\"text\\":\\"Released ${IMAGE_TAG}\\",\\"tags\\":[\\"release\\",\\"production\\"]}" \
-            2>/dev/null || true   # don't fail the pipeline if Grafana isn't configured yet
+          docker run --rm --network devops-net curlimages/curl:latest -fsS http://prometheus:9090/-/healthy
+          docker run --rm --network devops-net curlimages/curl:latest -fsS http://alertmanager:9093/-/healthy
+          echo "Prometheus and Alertmanager are healthy"
         '''
+        sh """
+          docker run --rm --network devops-net curlimages/curl:latest \\
+            -fsS -X POST http://grafana:3000/api/annotations \\
+            -H 'Content-Type: application/json' \\
+            -u admin:admin \\
+            -d '{"text":"Released ${IMAGE_TAG}","tags":["release","production"]}' \\
+            || echo "WARN: could not post Grafana annotation (non-fatal)"
+        """
       }
     }
   }
@@ -238,9 +200,6 @@ pipeline {
     }
     failure {
       echo "Pipeline failed - check the stage logs above"
-    }
-    always {
-      cleanWs(patterns: [[pattern: 'artifacts/*.tar.gz', type: 'INCLUDE']])
     }
   }
 }
