@@ -82,18 +82,20 @@ pipeline {
               mkdir -p security
               docker run --rm \\
                 -v /var/run/docker.sock:/var/run/docker.sock \\
-                -v "${WORKSPACE}/security:/out" \\
+                -v jenkins_home:/var/jenkins_home \\
                 aquasec/trivy:latest image \\
                   --severity HIGH,CRITICAL \\
                   --exit-code 0 \\
+                  --no-progress \\
                   --format json \\
-                  --output /out/trivy-report.json \\
+                  --output ${WORKSPACE}/security/trivy-report.json \\
                   ${APP_NAME}:${IMAGE_TAG}
+              echo "Trivy report:"
+              ls -la security/
             """
             archiveArtifacts artifacts: 'security/trivy-report.json', allowEmptyArchive: true
           }
         }
-      }
     }
 
     stage('Deploy to Staging') {
