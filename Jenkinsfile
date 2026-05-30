@@ -90,12 +90,13 @@ pipeline {
                   --format json \\
                   --output ${WORKSPACE}/security/trivy-report.json \\
                   ${APP_NAME}:${IMAGE_TAG}
-              echo "Trivy report:"
+              echo "Trivy report contents:"
               ls -la security/
             """
             archiveArtifacts artifacts: 'security/trivy-report.json', allowEmptyArchive: true
           }
         }
+      }
     }
 
     stage('Deploy to Staging') {
