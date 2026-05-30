@@ -1,180 +1,336 @@
-# DevOps Task Manager — Jenkins CI/CD Pipeline (SIT223/SIT753 HD Task)
+# DevOps Task Manager
 
-A small REST API (Node.js + Express, JWT auth, task CRUD) used as the subject
-of a full 7-stage Jenkins pipeline:
+A Node.js REST API used as the subject of a complete 7-stage Jenkins CI/CD
+pipeline, built for the SIT223/SIT753 HD Task.
+
+The pipeline:
 
 **Build → Test → Code Quality → Security → Deploy → Release → Monitoring**
 
-Everything is containerised. You only need Docker installed on your machine.
+Everything runs in Docker. The only thing you need installed on the host is
+Docker Desktop.
 
 ---
 
-## What you get
+## What this project contains
 
-| Layer | Tool | What it does |
-|---|---|---|
-| App | Node.js 20, Express | REST API with `/api/auth/{register,login}` and `/api/tasks` CRUD |
-| Tests | Jest + Supertest | Unit + integration, JUnit reports |
-| Build | Docker | Tagged with `BUILD#-gitsha`, image archived per build |
-| Code quality | SonarQube (self-hosted) | Quality gate gates the pipeline |
-| Security | npm audit + Trivy | Dependency + container scans in parallel |
-| Deploy | Docker Compose | Staging on :3001, smoke-tested |
-| Release | Docker Compose + Git tag | Production on :3000, git tag per release |
-| Monitor | Prometheus + Grafana + Alertmanager | Live dashboards, alert rules, deploy annotations |
+| Layer | Tool |
+|---|---|
+| App | Node.js 20 + Express, JWT auth, per-user task CRUD |
+| Tests | Jest unit tests + Supertest integration tests |
+| Build | Multi-stage Docker (non-root, healthchecked) |
+| Code quality | SonarQube Community Edition (self-hosted) |
+| Security | npm audit + Trivy (parallel) |
+| Deploy | Docker Compose, staging on :3002 |
+| Release | Docker Compose, production on :3000, plus git tag |
+| Monitoring | Prometheus + Grafana + Alertmanager, auto-provisioned dashboard |
 
 ---
 
-## One-time setup (≈ 15 minutes)
+## Prerequisites
 
-### 0. Prerequisites
-* Docker Desktop (or Docker Engine) running
+* Windows 11 (this guide assumes Windows, but the commands are mostly portable)
+* WSL 2 enabled
+* Docker Desktop with the WSL 2 backend
 * Git
-* A free GitHub repository to push this code to
+* At least 12 GB of RAM allocated to WSL via `~/.wslconfig`
 
-### 1. Push the code to GitHub
+If you have not done the Docker side yet, the short version is:
 
-```bash
-cd devops-task-manager
-git init && git add . && git commit -m "Initial commit"
-git branch -M main
-git remote add origin git@github.com:<your-username>/devops-task-manager.git
-git push -u origin main
+```powershell
+wsl --install
+wsl --update
+wsl --set-default-version 2
 ```
 
-### 2. Start Jenkins + SonarQube
+Then install Docker Desktop from <https://www.docker.com/products/docker-desktop/>.
+After the install, increase WSL resources by creating `%USERPROFILE%\.wslconfig`:
 
-```bash
+```ini
+[wsl2]
+memory=12GB
+processors=8
+swap=4GB
+```
+
+Then restart WSL and Docker:
+
+```powershell
+wsl --shutdown
+```
+
+(Quit Docker Desktop from the tray, then relaunch it from the Start menu.)
+
+Verify Docker works:
+
+```powershell
+docker run hello-world
+```
+
+---
+
+## Setup, from zero
+
+Run every command below in order. Total wall-clock time is around 25 minutes,
+mostly waiting for image pulls on the first run.
+
+### 1. Clone the repository
+
+```powershell
+cd $env:USERPROFILE
+mkdir devops-hd
+cd devops-hd
+git clone https://github.com/JasSin155/devops-task-manager.git
+cd devops-task-manager
+```
+
+### 2. Start Jenkins and SonarQube
+
+```powershell
 docker compose -f docker-compose.jenkins.yml up -d
 ```
 
-* Jenkins UI:   http://localhost:8080
-* SonarQube UI: http://localhost:9000  (default login: `admin` / `admin`)
+First run takes 3-5 minutes (pulls ~1.5 GB of images).
 
-Unlock Jenkins:
-```bash
+Verify both containers are running:
+
+```powershell
+docker ps
+```
+
+Get the initial Jenkins unlock password:
+
+```powershell
 docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
 ```
 
-Install the suggested plugins, then add these extras under **Manage Jenkins → Plugins → Available**:
-* **Docker Pipeline**
-* **SonarQube Scanner**
-* **JUnit**
-* **Pipeline Utility Steps**
-* **AnsiColor**
-* **Timestamper**
+### 3. Configure Jenkins (one-time, through the browser)
 
-### 3. Configure SonarQube
+Open <http://localhost:8080>:
 
-1. Go to http://localhost:9000 and log in (`admin` / `admin`, set a new password).
-2. **My Account → Security → Generate Token** — copy the token.
-3. In Jenkins: **Manage Jenkins → Credentials → System → Global → Add Credentials**
-   * Kind: *Secret text*, ID: `sonar-token`, Secret: *(paste the token)*
-4. In Jenkins: **Manage Jenkins → System → SonarQube servers**
+1. Paste the unlock password from the previous step.
+2. Choose **Install suggested plugins** and wait for it to finish (~5 minutes).
+3. Create the admin user. Pick any username and password you will remember.
+4. On the next screen leave the Jenkins URL as `http://localhost:8080/` and
+   click Save.
+
+Install three extra plugins. Go to **Manage Jenkins → Plugins → Available
+plugins** and tick each of these (search one at a time):
+
+* Docker Pipeline
+* SonarQube Scanner
+* AnsiColor
+
+Then click **Install**, tick "Restart Jenkins when installation is complete
+and no jobs are running", and wait ~30 seconds for Jenkins to come back.
+
+### 4. Configure SonarQube (one-time, through the browser)
+
+Open <http://localhost:9000>:
+
+1. Log in as `admin` / `admin`.
+2. It will force a password change. Pick something memorable.
+3. Top-right avatar → **My Account → Security**.
+4. Generate a token named `jenkins`, no expiration. **Copy the token now**,
+   it is shown only once.
+
+### 5. Tell Jenkins about the SonarQube token
+
+In Jenkins:
+
+1. **Manage Jenkins → Credentials → System → Global → Add Credentials**.
+2. Kind: Secret text. Secret: the token from the step above.
+   **ID must be exactly `sonar-token`** (lowercase, with hyphen).
+3. **Manage Jenkins → System** → scroll to **SonarQube servers** →
+   **Add SonarQube**:
    * Name: `SonarQube`
    * Server URL: `http://sonarqube:9000`
-   * Server authentication token: *select the `sonar-token` credential*
+   * Server authentication token: pick `sonar-token` from the dropdown
+4. Save.
 
-### 4. Start the monitoring stack
+### 6. Create the SonarQube → Jenkins webhook
 
-```bash
-docker network inspect devops-net >/dev/null 2>&1 || docker network create devops-net
+Back in SonarQube:
+
+1. **Administration → Configuration → Webhooks → Create**.
+2. Name: `Jenkins`. URL: `http://jenkins:8080/sonarqube-webhook/` (include
+   the trailing slash). Leave Secret blank. Save.
+
+### 7. Install the tools Jenkins needs inside its own container
+
+The base Jenkins image does not ship with Docker, Node, or the SonarScanner.
+Install all three with these three commands:
+
+```powershell
+# Docker CLI and Compose plugin
+docker exec -u root jenkins bash -c "apt-get update && apt-get install -y docker.io docker-compose-plugin"
+
+# Node.js 20 (used directly by the Test and Security stages)
+docker exec -u root jenkins bash -c "curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs"
+
+# SonarScanner CLI (used by the Code Quality stage)
+docker exec -u root jenkins bash -c "apt-get install -y unzip && curl -fsSL https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-6.2.1.4610-linux-x64.zip -o /tmp/sonar.zip && unzip -q /tmp/sonar.zip -d /opt && ln -sf /opt/sonar-scanner-6.2.1.4610-linux-x64/bin/sonar-scanner /usr/local/bin/sonar-scanner && sonar-scanner --version"
+```
+
+Verify all three are installed:
+
+```powershell
+docker exec jenkins docker --version
+docker exec jenkins docker compose version
+docker exec jenkins node --version
+docker exec jenkins sonar-scanner --version
+```
+
+> **Note:** If you ever recreate the Jenkins container (for example with
+> `docker compose down`), these three installs are wiped and you will need
+> to run them again. For coursework that is fine.
+
+### 8. Start the monitoring stack
+
+The `devops-net` network was created by the Jenkins compose file, but verify
+it exists before starting monitoring:
+
+```powershell
+docker network inspect devops-net
+```
+
+If you see `[]` or an error, create it:
+
+```powershell
+docker network create devops-net
+```
+
+Then start monitoring:
+
+```powershell
 docker compose -f monitoring/docker-compose.monitoring.yml up -d
 ```
 
-* Prometheus:    http://localhost:9090
-* Alertmanager:  http://localhost:9093
-* Grafana:       http://localhost:3001  (login `admin` / `admin`, the dashboard auto-loads)
+Verify all five services are now running:
 
-*(Optional)* For real alert delivery, replace the webhook URL in
-`monitoring/alertmanager.yml` with one from https://webhook.site or your own
-endpoint, then `docker compose -f monitoring/docker-compose.monitoring.yml restart alertmanager`.
+```powershell
+docker ps
+```
 
-### 5. Create the Jenkins pipeline job
+You should see `jenkins`, `sonarqube`, `prometheus`, `grafana`, `alertmanager`.
 
-1. Jenkins UI → **New Item** → name `task-manager-pipeline` → *Pipeline* → OK.
-2. Under **Pipeline**:
-   * Definition: *Pipeline script from SCM*
-   * SCM: Git
-   * Repository URL: your GitHub URL
+Open each one to confirm they respond:
+
+* Prometheus: <http://localhost:9090>
+* Alertmanager: <http://localhost:9093>
+* Grafana: <http://localhost:3001> (login `admin` / `admin`, then click Skip
+  on the password change prompt)
+
+### 9. Create the Jenkins pipeline job
+
+In Jenkins:
+
+1. Dashboard → **New Item**.
+2. Item name: `task-manager-pipeline`. Type: **Pipeline**. OK.
+3. Scroll down to the **Pipeline** section:
+   * Definition: **Pipeline script from SCM**
+   * SCM: **Git**
+   * Repository URL: `https://github.com/JasSin155/devops-task-manager.git`
+   * Branch specifier: `*/main`
    * Script Path: `Jenkinsfile`
-3. **Save** → **Build Now**.
+4. Save.
 
-### 6. Watch the pipeline run
+### 10. Run the pipeline
 
-Open the build → **Console Output** to follow each stage. Or use the
-**Stage View** for the visual pipeline.
+Click **Build Now** on the job page. The first build takes about 8-12 minutes
+because it has to pull the Trivy database, the SonarScanner image, and the
+sibling containers used by some stages. Later runs take 2-3 minutes.
 
-When it finishes, the app is live:
-* Staging:    http://localhost:3001
-* Production: http://localhost:3000
-* Metrics:    http://localhost:3000/metrics
-* Grafana dashboard: http://localhost:3001 → *Task Manager — Production*
+When the build finishes, you should see all 7 stages green. The live URLs are:
+
+* Production app: <http://localhost:3000>
+* Staging app: <http://localhost:3002>
+* Grafana dashboard: <http://localhost:3001> → Dashboards → Task Manager
+* Prometheus targets: <http://localhost:9090/targets>
 
 ---
 
-## Trying the API by hand
+## Using the API by hand
 
-```bash
-# Register
-curl -X POST http://localhost:3000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"alice","password":"StrongPass!1"}'
+```powershell
+# Register a user
+curl -X POST http://localhost:3000/api/auth/register `
+  -H "Content-Type: application/json" `
+  -d '{\"username\":\"alice\",\"password\":\"StrongPass!1\"}'
 
-# Login - grab the token
-TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"alice","password":"StrongPass!1"}' | jq -r .token)
+# Log in and capture the token
+$token = (curl -s -X POST http://localhost:3000/api/auth/login `
+  -H "Content-Type: application/json" `
+  -d '{\"username\":\"alice\",\"password\":\"StrongPass!1\"}' | ConvertFrom-Json).token
 
 # Create a task
-curl -X POST http://localhost:3000/api/tasks \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Finish HD task","description":"Record the demo video"}'
+curl -X POST http://localhost:3000/api/tasks `
+  -H "Authorization: Bearer $token" `
+  -H "Content-Type: application/json" `
+  -d '{\"title\":\"Record demo\",\"description\":\"For the HD task\"}'
 
-# List tasks
-curl http://localhost:3000/api/tasks -H "Authorization: Bearer $TOKEN"
-```
-
----
-
-## Project layout
-
-```
-.
-├── Jenkinsfile                       # The 7-stage pipeline
-├── Dockerfile                        # Multi-stage, non-root, healthchecked
-├── docker-compose.jenkins.yml        # Runs Jenkins + SonarQube
-├── docker-compose.staging.yml        # Staging deployment (port 3001)
-├── docker-compose.production.yml     # Production deployment (port 3000)
-├── sonar-project.properties          # SonarQube config (exclusions, coverage paths)
-├── src/                              # Express application
-│   ├── app.js
-│   ├── server.js
-│   ├── middleware/{auth.js,metrics.js}
-│   └── routes/{auth.js,tasks.js}
-├── tests/
-│   ├── unit/                         # Jest unit tests
-│   └── integration/                  # Supertest integration tests
-├── monitoring/
-│   ├── docker-compose.monitoring.yml
-│   ├── prometheus.yml
-│   ├── alert-rules.yml
-│   ├── alertmanager.yml
-│   └── grafana/...                   # Provisioned datasource + dashboard
-└── docs/
-    ├── REPORT_CONTENT.md             # Copy-paste content for your PDF report
-    ├── DEMO_SCRIPT.md                # Word-for-word video script
-    └── ARCHITECTURE.md               # Pipeline diagram (Mermaid)
+# List my tasks
+curl http://localhost:3000/api/tasks -H "Authorization: Bearer $token"
 ```
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Fix |
+| Symptom | Likely cause and fix |
 |---|---|
-| `docker: command not found` inside Jenkins | The compose file mounts the host socket. Make sure the `jenkins` container is up and that the `user: root` line in `docker-compose.jenkins.yml` is present. |
-| `network devops-net not found` | Run `docker network create devops-net` before starting any stack. |
-| SonarQube quality gate keeps failing | The default quality gate is strict on coverage. Lower it in SonarQube → Quality Gates, or wait for coverage to improve. |
-| Trivy reports HIGH/CRITICAL vulns | They're documented in your report (see `docs/REPORT_CONTENT.md` for the wording). The pipeline does **not** fail on them by default — change `--exit-code 0` to `--exit-code 1` in `Jenkinsfile` if you want to gate. |
-| `waitForQualityGate` hangs forever | The SonarQube webhook isn't reaching Jenkins. In SonarQube: **Administration → Configuration → Webhooks → Create**, URL `http://jenkins:8080/sonarqube-webhook/`. |
+| `docker: command not found` inside Jenkins | Step 7 was skipped or the Jenkins container was recreated. Re-run the install commands. |
+| `docker compose: unknown shorthand flag: 'f'` | The Compose plugin was not installed inside the Jenkins container. Re-run the `docker-compose-plugin` install command from Step 7. |
+| SonarQube quality gate hangs at "Checking quality gate" | The webhook in Step 6 is missing. Add it and retry. |
+| Code Quality stage cannot find `sonar-scanner` | SonarScanner CLI was not installed in Step 7. Re-run that command. |
+| `port is already allocated` on 3000, 3001, 3002, 8080, or 9000 | Another service is using the port. Stop it or change the port in the relevant compose file. |
+| Trivy report missing from artefacts | Make sure you are using the final Jenkinsfile, which captures Trivy output via stdout. |
+| Build, Test, etc. all skipped after Test fails | Expected. Stages gate each other. Fix the first failure. |
+
+---
+
+## Stopping everything
+
+```powershell
+docker compose -f monitoring/docker-compose.monitoring.yml down
+docker compose -f docker-compose.production.yml down
+docker compose -f docker-compose.staging.yml down
+docker compose -f docker-compose.jenkins.yml down
+```
+
+Add `-v` to any of these to also delete the volumes (will wipe Jenkins
+configuration, SonarQube data, and Grafana dashboards).
+
+---
+
+## Repository layout
+
+```
+.
+├── Jenkinsfile                       (the 7-stage declarative pipeline)
+├── Dockerfile                        (multi-stage Alpine, non-root, healthchecked)
+├── docker-compose.jenkins.yml        (Jenkins + SonarQube stack)
+├── docker-compose.staging.yml        (staging deployment on :3002)
+├── docker-compose.production.yml     (production deployment on :3000)
+├── sonar-project.properties          (SonarQube exclusions and coverage paths)
+├── src/
+│   ├── app.js                        (Express app factory)
+│   ├── server.js                     (HTTP listener)
+│   ├── middleware/
+│   │   ├── auth.js                   (JWT sign + verify)
+│   │   └── metrics.js                (Prometheus metrics middleware)
+│   └── routes/
+│       ├── auth.js                   (register + login)
+│       └── tasks.js                  (authenticated CRUD)
+├── tests/
+│   ├── unit/                         (Jest unit tests)
+│   └── integration/                  (Supertest integration tests)
+├── monitoring/
+│   ├── docker-compose.monitoring.yml (Prometheus + Grafana + Alertmanager)
+│   ├── prometheus.yml                (scrape config)
+│   ├── alert-rules.yml               (4 alert rules)
+│   ├── alertmanager.yml              (routing + receivers)
+│   └── grafana/                      (provisioned datasource + dashboard)
+└── docs/
+    └── ARCHITECTURE.md               (system architecture)
+```
