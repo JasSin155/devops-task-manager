@@ -59,8 +59,11 @@ pipeline {
           steps {
             sh '''
               docker run --rm \
-                -v "$PWD":/app -w /app \
-                node:20-alpine sh -c "npm ci && npm test"
+                -v jenkins_home:/var/jenkins_home \
+                -w ${WORKSPACE} \
+                --entrypoint sh \
+                node:20-alpine \
+                -c "npm ci --no-audit --no-fund && npm test"
             '''
           }
           post {
@@ -73,8 +76,11 @@ pipeline {
           steps {
             sh '''
               docker run --rm \
-                -v "$PWD":/app -w /app \
-                node:20-alpine sh -c "npm ci && npm run test:integration"
+                -v jenkins_home:/var/jenkins_home \
+                -w ${WORKSPACE} \
+                --entrypoint sh \
+                node:20-alpine \
+                -c "npm ci --no-audit --no-fund && npm run test:integration"
             '''
           }
           post {
@@ -95,10 +101,12 @@ pipeline {
           sh '''
             docker run --rm \
               --network devops-net \
-              -v "$PWD":/usr/src \
+              -v jenkins_home:/var/jenkins_home \
+              -w ${WORKSPACE} \
               -e SONAR_HOST_URL=${SONAR_HOST_URL} \
               -e SONAR_TOKEN=${SONAR_TOKEN} \
-              sonarsource/sonar-scanner-cli:latest
+              sonarsource/sonar-scanner-cli:latest \
+              -Dsonar.projectBaseDir=${WORKSPACE}
           '''
         }
         // Block the pipeline until SonarQube finishes computing the quality gate.
@@ -117,9 +125,12 @@ pipeline {
         stage('Dependency scan (npm audit)') {
           steps {
             sh '''
-              # Don't fail on low/moderate vulns - we report and triage instead.
-              docker run --rm -v "$PWD":/app -w /app node:20-alpine sh -c \
-                "npm ci --ignore-scripts && npm audit --audit-level=high --json > npm-audit.json || true"
+              docker run --rm \
+                -v jenkins_home:/var/jenkins_home \
+                -w ${WORKSPACE} \
+                --entrypoint sh \
+                node:20-alpine \
+                -c "npm ci --ignore-scripts --no-audit --no-fund && npm audit --audit-level=high --json > npm-audit.json || true"
             '''
             archiveArtifacts artifacts: 'npm-audit.json', allowEmptyArchive: true
           }
