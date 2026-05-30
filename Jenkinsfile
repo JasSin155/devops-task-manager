@@ -1,5 +1,3 @@
-// Jenkinsfile - declarative pipeline implementing all 7 HD stages.
-
 pipeline {
   agent any
 
@@ -41,42 +39,14 @@ pipeline {
     }
 
     stage('Test') {
-      parallel {
-        stage('Unit tests') {
-          steps {
-            writeFile file: 'ci-unit.sh', text: '#!/bin/sh\nset -e\nnpm ci --no-audit --no-fund\nnpm test\n'
-            sh '''
-              chmod +x ci-unit.sh
-              docker run --rm \
-                -v jenkins_home:/var/jenkins_home \
-                -w "${WORKSPACE}" \
-                node:20-alpine \
-                sh ./ci-unit.sh
-            '''
-          }
-          post {
-            always {
-              junit allowEmptyResults: true, testResults: 'test-results/junit.xml'
-            }
-          }
-        }
-        stage('Integration tests') {
-          steps {
-            writeFile file: 'ci-integration.sh', text: '#!/bin/sh\nset -e\nnpm ci --no-audit --no-fund\nnpm run test:integration\n'
-            sh '''
-              chmod +x ci-integration.sh
-              docker run --rm \
-                -v jenkins_home:/var/jenkins_home \
-                -w "${WORKSPACE}" \
-                node:20-alpine \
-                sh ./ci-integration.sh
-            '''
-          }
-          post {
-            always {
-              junit allowEmptyResults: true, testResults: 'test-results/junit.xml'
-            }
-          }
+      steps {
+        sh 'npm ci --no-audit --no-fund'
+        sh 'npm test'
+        sh 'npm run test:integration'
+      }
+      post {
+        always {
+          junit allowEmptyResults: true, testResults: 'test-results/junit.xml'
         }
       }
     }
@@ -87,12 +57,10 @@ pipeline {
           sh '''
             docker run --rm \
               --network devops-net \
-              -v jenkins_home:/var/jenkins_home \
-              -w "${WORKSPACE}" \
+              -v "${WORKSPACE}:/usr/src" \
               -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
               -e SONAR_TOKEN="${SONAR_TOKEN}" \
-              sonarsource/sonar-scanner-cli:latest \
-              -Dsonar.projectBaseDir="${WORKSPACE}"
+              sonarsource/sonar-scanner-cli:latest
           '''
         }
       }
@@ -102,15 +70,7 @@ pipeline {
       parallel {
         stage('Dependency scan (npm audit)') {
           steps {
-            writeFile file: 'ci-audit.sh', text: '#!/bin/sh\nnpm ci --ignore-scripts --no-audit --no-fund\nnpm audit --audit-level=high --json > npm-audit.json || true\n'
-            sh '''
-              chmod +x ci-audit.sh
-              docker run --rm \
-                -v jenkins_home:/var/jenkins_home \
-                -w "${WORKSPACE}" \
-                node:20-alpine \
-                sh ./ci-audit.sh
-            '''
+            sh 'npm audit --audit-level=high --json > npm-audit.json || true'
             archiveArtifacts artifacts: 'npm-audit.json', allowEmptyArchive: true
           }
         }
@@ -120,13 +80,12 @@ pipeline {
               mkdir -p security
               docker run --rm \\
                 -v /var/run/docker.sock:/var/run/docker.sock \\
-                -v jenkins_home:/var/jenkins_home \\
-                -w "${WORKSPACE}" \\
+                -v "${WORKSPACE}/security:/out" \\
                 aquasec/trivy:latest image \\
                   --severity HIGH,CRITICAL \\
                   --exit-code 0 \\
                   --format json \\
-                  --output security/trivy-report.json \\
+                  --output /out/trivy-report.json \\
                   ${APP_NAME}:${IMAGE_TAG}
             """
             archiveArtifacts artifacts: 'security/trivy-report.json', allowEmptyArchive: true
@@ -139,10 +98,7 @@ pipeline {
       steps {
         sh """
           docker network inspect devops-net >/dev/null 2>&1 || docker network create devops-net
-
-          IMAGE_TAG=${IMAGE_TAG} \\
-            docker compose -f docker-compose.staging.yml up -d --force-recreate
-
+          IMAGE_TAG=${IMAGE_TAG} docker compose -f docker-compose.staging.yml up -d --force-recreate
           for i in \$(seq 1 20); do
             if docker run --rm --network devops-net curlimages/curl:latest -fsS http://task-manager-staging:3000/health; then
               echo "Staging is healthy"
@@ -159,9 +115,7 @@ pipeline {
     stage('Release to Production') {
       steps {
         sh """
-          IMAGE_TAG=${IMAGE_TAG} \\
-            docker compose -f docker-compose.production.yml up -d --force-recreate
-
+          IMAGE_TAG=${IMAGE_TAG} docker compose -f docker-compose.production.yml up -d --force-recreate
           for i in \$(seq 1 20); do
             if docker run --rm --network devops-net curlimages/curl:latest -fsS http://task-manager-production:3000/health; then
               echo "Production is healthy"
@@ -169,7 +123,6 @@ pipeline {
             fi
             sleep 3
           done
-
           git tag -f "release-${IMAGE_TAG}" || true
         """
       }
@@ -195,11 +148,7 @@ pipeline {
   }
 
   post {
-    success {
-      echo "Pipeline succeeded - ${APP_NAME}:${IMAGE_TAG} is live in production"
-    }
-    failure {
-      echo "Pipeline failed - check the stage logs above"
-    }
+    success { echo "Pipeline succeeded - ${APP_NAME}:${IMAGE_TAG} is live in production" }
+    failure { echo "Pipeline failed - check the stage logs above" }
   }
 }
