@@ -57,10 +57,15 @@ pipeline {
           sh '''
             docker run --rm \
               --network devops-net \
-              -v "${WORKSPACE}:/usr/src" \
+              -v jenkins_home:/var/jenkins_home \
+              -w "${WORKSPACE}" \
               -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
               -e SONAR_TOKEN="${SONAR_TOKEN}" \
-              sonarsource/sonar-scanner-cli:latest
+              sonarsource/sonar-scanner-cli:latest \
+              -Dsonar.projectBaseDir=${WORKSPACE} \
+              -Dsonar.projectKey=devops-task-manager \
+              -Dsonar.sources=src \
+              -Dsonar.tests=tests
           '''
         }
       }
