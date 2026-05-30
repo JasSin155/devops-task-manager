@@ -1,0 +1,18 @@
+services:
+  app-staging:
+    image: devops-task-manager:${IMAGE_TAG:-latest}
+    container_name: task-manager-staging
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=staging
+      - APP_VERSION=${IMAGE_TAG:-latest}
+      - JWT_SECRET=${JWT_SECRET_STAGING:-staging-secret-change-me}
+      - PORT=3000
+    ports:
+      - "3001:3000"
+    networks:
+      - devops-net
+
+networks:
+  devops-net:
+    external: true

@@ -1,0 +1,15 @@
+node_modules
+coverage
+test-results
+artifacts
+security
+.git
+.gitignore
+.env
+.env.*
+*.log
+.DS_Store
+Jenkinsfile
+docker-compose.*.yml
+monitoring
+docs

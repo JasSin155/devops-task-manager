@@ -1,0 +1,47 @@
+groups:
+  - name: task-manager-alerts
+    rules:
+
+      - alert: AppDown
+        expr: up{job=~"task-manager-.*"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Task Manager is down ({{ $labels.environment }})"
+          description: "The {{ $labels.environment }} instance has been unreachable to Prometheus for more than a minute."
+
+      - alert: HighErrorRate
+        expr: |
+          sum by (environment) (rate(app_http_requests_total{status=~"5.."}[2m]))
+          /
+          sum by (environment) (rate(app_http_requests_total[2m]))
+          > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx error rate in {{ $labels.environment }}"
+          description: "More than 5% of requests are returning 5xx for 2 minutes."
+
+      - alert: HighRequestLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (environment, le) (rate(app_http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency > 1s in {{ $labels.environment }}"
+          description: "95th percentile request latency has been above 1 second for 5 minutes."
+
+      - alert: EventLoopLagHigh
+        expr: app_nodejs_eventloop_lag_seconds > 0.2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node.js event loop lag is high ({{ $labels.environment }})"
+          description: "Event loop lag exceeded 200ms for 2 minutes - the app is CPU-blocked."

@@ -1,0 +1,43 @@
+# Run Jenkins itself, plus the SonarQube server, on the same shared network as
+# the application stack. The host Docker socket is mounted so Jenkins can build
+# and run containers on the host (Docker-out-of-Docker pattern).
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: jenkins
+    restart: unless-stopped
+    user: root          # required to mount the docker socket; OK for a coursework demo
+    ports:
+      - "8080:8080"     # web UI
+      - "50000:50000"   # agent port
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - devops-net
+
+  sonarqube:
+    image: sonarqube:community
+    container_name: sonarqube
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    volumes:
+      - sonar_data:/opt/sonarqube/data
+      - sonar_extensions:/opt/sonarqube/extensions
+      - sonar_logs:/opt/sonarqube/logs
+    networks:
+      - devops-net
+
+volumes:
+  jenkins_home:
+  sonar_data:
+  sonar_extensions:
+  sonar_logs:
+
+networks:
+  devops-net:
+    name: devops-net

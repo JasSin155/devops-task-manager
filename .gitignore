@@ -1,0 +1,11 @@
+node_modules/
+coverage/
+test-results/
+artifacts/
+security/
+npm-audit.json
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store

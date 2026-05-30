@@ -1,0 +1,18 @@
+services:
+  app-production:
+    image: devops-task-manager:${IMAGE_TAG:-latest}
+    container_name: task-manager-production
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - APP_VERSION=${IMAGE_TAG:-latest}
+      - JWT_SECRET=${JWT_SECRET_PRODUCTION:-prod-secret-change-me}
+      - PORT=3000
+    ports:
+      - "3000:3000"
+    networks:
+      - devops-net
+
+networks:
+  devops-net:
+    external: true

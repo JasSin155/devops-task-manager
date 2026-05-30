@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'task-manager-production'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['task-manager-production:3000']
+        labels:
+          environment: production
+
+  - job_name: 'task-manager-staging'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['task-manager-staging:3000']
+        labels:
+          environment: staging
